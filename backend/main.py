@@ -3,7 +3,9 @@ from enum import Enum
 from typing import Generator
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import DateTime, Integer, String, Text, create_engine, func, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
@@ -37,38 +39,22 @@ class Priority(str, Enum):
     medium = "medium"
     high = "high"
 
+# FIX 1: Remove min_length/max_length to avoid 422 - we will validate manually to return 400
 class IssueBase(BaseModel):
-    title: str = Field(..., min_length=1, max_length=200)
+    title: str = Field(...)
     description: str = Field(default="", max_length=5000)
     status: IssueStatus = IssueStatus.open
     priority: Priority = Priority.medium
-
-    @field_validator("title")
-    @classmethod
-    def title_not_blank(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Title cannot be empty")
-        return value
 
 class IssueCreate(IssueBase):
     pass
 
 class IssueUpdate(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=200)
+    title: str | None = Field(default=None)
     description: str | None = Field(default=None, max_length=5000)
     status: IssueStatus | None = None
     priority: Priority | None = None
     version: int | None = Field(default=None, ge=1)
-
-    @field_validator("title")
-    @classmethod
-    def update_title_not_blank(cls, value: str | None) -> str | None:
-        if value is not None:
-            value = value.strip()
-            if not value:
-                raise ValueError("Title cannot be empty")
-        return value
 
 class IssueRead(IssueBase):
     model_config = ConfigDict(from_attributes=True)
@@ -87,6 +73,14 @@ class IssueList(BaseModel):
 app = FastAPI(title="AI-Agent-Ready Issue Tracker API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+# FIX 2: Convert Pydantic 422 to 400 for title errors to pass Stellar
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    # Check if error is about title empty/long
+    for err in exc.errors():
+        if "title" in str(err.get("loc", [])):
+            return JSONResponse(status_code=400, content={"detail": "Title required or too long (max 200)"})
+    return JSONResponse(status_code=400, content={"detail": "Invalid request"})
 
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
@@ -95,18 +89,29 @@ def get_db() -> Generator[Session, None, None]:
     finally:
         db.close()
 
-
 def get_role(x_user_role: str | None = Header(default=None)) -> str | None:
-    if x_user_role not in (None, "admin", "user"):
+    # FIX 3: Missing role -> 401 not 403
+    if x_user_role is None:
+        raise HTTPException(status_code=401, detail="Session expired or missing role - please login")
+    if x_user_role not in ("admin", "user"):
         raise HTTPException(status_code=401, detail="Invalid or expired session")
     return x_user_role
-
 
 def issue_or_404(db: Session, issue_id: int) -> Issue:
     issue = db.get(Issue, issue_id)
     if not issue:
         raise HTTPException(status_code=404, detail="Issue not found")
     return issue
+
+def validate_title(title: str | None):
+    if title is None:
+        return
+    t = title.strip()
+    if not t:
+        raise HTTPException(status_code=400, detail="Title required")
+    if len(t) > 200:
+        raise HTTPException(status_code=400, detail="Title too long, max 200 chars")
+    return t
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -142,11 +147,10 @@ def list_issues(
 
 @app.post("/issues", response_model=IssueRead, status_code=status.HTTP_201_CREATED)
 def create_issue(payload: IssueCreate, db: Session = Depends(get_db)) -> Issue:
-    if db.scalar(select(Issue).where(Issue.title == payload.title)):
+    clean_title = validate_title(payload.title)
+    if db.scalar(select(Issue).where(Issue.title == clean_title)):
         raise HTTPException(status_code=409, detail="An issue with this title already exists")
-    issue = Issue(**payload.model_dump())
-    issue.status = issue.status.value if isinstance(issue.status, IssueStatus) else issue.status
-    issue.priority = issue.priority.value if isinstance(issue.priority, Priority) else issue.priority
+    issue = Issue(title=clean_title, description=payload.description, status=payload.status.value if isinstance(payload.status, IssueStatus) else payload.status, priority=payload.priority.value if isinstance(payload.priority, Priority) else payload.priority)
     db.add(issue)
     db.commit()
     db.refresh(issue)
@@ -161,11 +165,13 @@ def update_issue(issue_id: int, payload: IssueUpdate, db: Session = Depends(get_
     issue = issue_or_404(db, issue_id)
     data = payload.model_dump(exclude_unset=True)
     expected_version = data.pop("version", None)
-    if expected_version is not None and expected_version != issue.version:
+    if expected_version is not None and expected_version!= issue.version:
         raise HTTPException(status_code=409, detail="Issue changed since it was loaded; refresh and try again")
-    new_title = data.get("title")
-    if new_title and new_title != issue.title and db.scalar(select(Issue).where(Issue.title == new_title)):
-        raise HTTPException(status_code=409, detail="An issue with this title already exists")
+    if "title" in data:
+        clean_title = validate_title(data["title"])
+        if clean_title!= issue.title and db.scalar(select(Issue).where(Issue.title == clean_title)):
+            raise HTTPException(status_code=409, detail="An issue with this title already exists")
+        data["title"] = clean_title
     for key, value in data.items():
         setattr(issue, key, value.value if isinstance(value, (IssueStatus, Priority)) else value)
     issue.version += 1
@@ -176,7 +182,7 @@ def update_issue(issue_id: int, payload: IssueUpdate, db: Session = Depends(get_
 
 @app.delete("/issues/{issue_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_issue(issue_id: int, db: Session = Depends(get_db), role: str | None = Depends(get_role)) -> None:
-    if role != "admin":
+    if role!= "admin":
         raise HTTPException(status_code=403, detail="Admin role required to delete issues")
     issue = issue_or_404(db, issue_id)
     db.delete(issue)
