@@ -1,0 +1,9 @@
+{
+  "name": "ai-agent-issue-tracker-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {"dev": "vite --host 0.0.0.0", "build": "tsc -b && vite build", "test": "jest --runInBand"},
+  "dependencies": {"react": "latest", "react-dom": "latest", "react-router-dom": "latest"},
+  "devDependencies": {"@types/jest": "latest", "@types/node": "latest", "@types/react": "latest", "@types/react-dom": "latest", "@vitejs/plugin-react": "latest", "@testing-library/jest-dom": "latest", "@testing-library/react": "latest", "@testing-library/user-event": "latest", "jest": "latest", "jest-environment-jsdom": "latest", "ts-jest": "latest", "typescript": "latest", "vite": "latest", "identity-obj-proxy": "latest"}
+}
