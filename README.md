@@ -1,7 +1,9 @@
 # AI-Agent-Ready Full-Stack Issue Tracker
 
 ## Demo
-- Link to screenshots or loom (put placeholder)
+No public hosted demo yet. Run locally with the setup steps below.
+
+**Status:** In progress — local full-stack project; no production deployment claimed.
 
 ## Tech Stack
 - Python FastAPI
@@ -14,7 +16,7 @@
 - Git
 
 ## Features
-- CRUD, filtering, pagination, search, auth, role-based permissions, validation
+- CRUD, filtering, pagination, search, header-based role gating (`X-User-Role`) as a development authorization stub, and validation
 - Responsive issue list, create, edit, and detail screens
 - Loading, empty, network error, validation, and success-through-navigation states
 - API sorting by id, title, priority, status, created_at, or updated_at
@@ -68,9 +70,20 @@ pytest -q
 
 cd ../frontend
 npm install
-npm test
+npm test -- --runInBand
 npm run build
 ```
+
+## Verified test run
+
+Run on 2026-10-04:
+
+- Backend: **12 passed**
+- Deterministic verifier: **7 passed**
+- Frontend Jest: **2 passed**
+- Frontend production build: **passed**
+
+The API contract uses `/issues` routes. The `X-User-Role` header is development authorization gating, not production authentication.
 
 ## Project structure
 ```text
