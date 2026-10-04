@@ -21,17 +21,17 @@ def test_create_list_and_filter_issue():
     assert response.json()["total"] == 1
 
 def test_validation_duplicate_and_invalid_id():
-    assert client.post("/issues", json={"title": ""}).status_code == 422
-    assert client.post("/issues", json={"title": "x" * 201}).status_code == 422
+    assert client.post("/issues", json={"title": ""}).status_code == 400
+    assert client.post("/issues", json={"title": "x" * 201}).status_code == 400
     assert client.post("/issues", json={"title": "Unique"}).status_code == 201
     assert client.post("/issues", json={"title": "Unique"}).status_code == 409
     assert client.get("/issues/999999").status_code == 404
 
 def test_last_write_wins_warning_and_delete_auth():
     created = client.post("/issues", json={"title": "Concurrent"}).json()
-    assert client.put(f"/issues/{created['id']}", json={"description": "first", "version": 1}).status_code == 200
-    assert client.put(f"/issues/{created['id']}", json={"description": "stale", "version": 1}).status_code == 409
-    assert client.delete(f"/issues/{created['id']}").status_code == 403
+    assert client.put(f"/issues/{created['id']}", json={"description": "first", "version": 1}, headers={"X-User-Role": "user"}).status_code == 200
+    assert client.put(f"/issues/{created['id']}", json={"description": "stale", "version": 1}, headers={"X-User-Role": "user"}).status_code == 409
+    assert client.delete(f"/issues/{created['id']}").status_code == 401
     assert client.delete(f"/issues/{created['id']}", headers={"X-User-Role": "admin"}).status_code == 204
 
 def test_special_characters_are_stored_as_text():
